@@ -415,6 +415,8 @@ void secondsUpdate()
     {
       nextPeriodTime = secondsSinceStart + reportingPeriodSec;
       reportIncrement = litersSinceStart - lastReportedTotal;
+      if (reportIncrement < 0)
+        reportIncrement = 0;
       lastReportedTotal = litersSinceStart;
       publishMessage();
       Serial.printf("liters since start: %f Increment: %f\n", litersSinceStart, reportIncrement);
@@ -460,7 +462,7 @@ void flowSim()
 
 void setup() {
   M5.begin();
-  M5.Lcd.setRotation(3);
+  M5.Lcd.setRotation(1);
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0, 2);
   M5.Lcd.setTextColor(TFT_WHITE,TFT_BLACK);
