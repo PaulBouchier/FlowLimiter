@@ -32,6 +32,10 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <esp_timer.h>
 #include <string>
 
+// GPIOs
+#define FLOW_PULSE_PIN 36
+#define INHIBIT_PIN 26
+
 // EEPROM variable offsets
 #define DEV_NUM_ADDR 0
 #define SIM_FLOW_ADDR 1
@@ -68,7 +72,7 @@ float litersSinceStart = 0;  // how many liters since start of today
 int litersSinceStart_int;
 float lpm = 0;  // liters/minute for display
 float flowLimit;
-float flowLimitTable[] = {2000.0, 1000.0, 500.0, 200.0, 100.0};
+float flowLimitTable[] = {2000.0, 1000.0, 500.0, 200.0, 100.0, 50.0};
 int flowLimitTableSize = sizeof(flowLimitTable) / sizeof(float);
 unsigned char flowLimitTableIndex;
 
@@ -95,7 +99,7 @@ int64_t nextFlowSensorTransition;
 bool simFlowSensorOutput = false;
 int nextFlowToggleTime;
 int lastHour = 0;
-const int reportingPeriodSec = 600;  // report each 10 minutes
+const int reportingPeriodSec = 300;  // report each 5 minutes
 int nextPeriodTime = reportingPeriodSec;
 float rateDivisor = reportingPeriodSec / 60;  // convert flow increment to lpm
 
@@ -168,6 +172,7 @@ void publishMessage()
   String datetimeString = String(datetime);
 
   StaticJsonDocument<200> doc;
+  doc["deviceId"] = deviceId;
   doc["time"] = datetimeString;
   doc["cum"] = litersSinceStart_int;
   doc["rate"] = reportIncrement / rateDivisor;
@@ -213,6 +218,15 @@ void displayFlow()
     float litersSinceDisplay = displayFlowCountInc / pulsesPerLiter;
     lpm = litersSinceDisplay * 60;
     M5.Lcd.printf("Flow: on %.1f lpm", lpm);  // if flow on, display lpm
+  }
+
+  if (buttonB)
+  {
+    flowCount = 0;  // reset liters in the day
+    litersSinceStart = 0;
+    lastReportedTotal = 0;
+    setShutoff(false);  // re-enable flow
+    buttonB = false;
   }
 }
 
@@ -336,21 +350,20 @@ void displayDateTime()
 void setShutoff(bool valveState)
 {
   shutoffValveState = valveState;     // reenable flow if it was disabled
-  shutoffLogPrinted = false;
-  // FIXME - write the valve DIO here
+  digitalWrite(INHIBIT_PIN, shutoffValveState);    // set valve
+  if (!valveState)
+  {
+    shutoffLogPrinted = false;
+  }
 }
 
 void midnight()
 {
   Serial.println("Midnight");
   flowCount = 0;  // reset liters in the day at midnight
+  litersSinceStart = 0;
   lastReportedTotal = 0;
-}
-
-void noon()
-{
-  Serial.println("Noon");
-  setShutoff(false); // re-enable flow at noon
+  setShutoff(false);  // re-enable flow
 }
 
 void hoursUpdate()
@@ -362,9 +375,6 @@ void hoursUpdate()
 
     if (0 == currentHour)
       midnight();
-
-    if (13 == currentHour)
-      noon();
 
     lastHour = currentHour;
   }
@@ -470,6 +480,11 @@ void setup() {
 
   Serial.begin(115200);
 
+  // for Flow Limiter, G36 is flow pulse input, G26 is valve output
+  pinMode(FLOW_PULSE_PIN, INPUT_PULLUP);
+  pinMode(INHIBIT_PIN, OUTPUT);
+  digitalWrite(INHIBIT_PIN, false);
+
   // Initialize EEPROM
   while (!EEPROM.begin(EEPROM_SIZE)) {  // Request storage of SIZE size(success return)
     Serial.println("\nFailed to initialise EEPROM!");
@@ -506,7 +521,7 @@ void setup() {
   }
   else
   {
-    // FIXME: Read flow sensor into flowSensorOutput here
+    flowSensorOutput = digitalRead(FLOW_PULSE_PIN);
   }
   lastFlowSensorOutput = flowSensorOutput;
 
@@ -561,7 +576,7 @@ void loop() {
   }
   else
   {
-    // FIXME: Read flow sensor into flowSensorOutput here
+    flowSensorOutput = digitalRead(FLOW_PULSE_PIN);
   }
 
   // Count rising edges from flow sensor
