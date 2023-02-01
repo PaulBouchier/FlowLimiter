@@ -40,7 +40,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #define DEV_NUM_ADDR 0
 #define SIM_FLOW_ADDR 1
 #define FLOW_LIMIT_INDEX_ADDR 2
-#define EEPROM_SIZE 3  // define the size of EEPROM(Byte).
+#define EEPROM_SIZE 10  // define the size of EEPROM(Byte).
 
 // The MQTT topics that this device should publish/subscribe
 #define AWS_IOT_PUBLISH_TOPIC   "flow-limiter/flow"
@@ -200,10 +200,21 @@ void resetDisplayMode()
   displayMode = 0;
 }
 
-void displayFlow()
+void displayFlowLine1()
 {
   M5.Lcd.setCursor(0, 0, 2);
-  M5.Lcd.print(" Litres today:");
+  if (0 == (RTC_TimeStruct.Seconds % 4))
+  {
+    M5.Lcd.print(" Button B: Reset");
+  }
+  else
+  {
+    M5.Lcd.print(" Litres today:");
+  }
+}
+
+void displayFlowData()
+{
   M5.Lcd.setCursor(0, 40, 4);
   M5.Lcd.printf("% .0f", litersSinceStart);
   M5.Lcd.setCursor(0, 100, 2);
@@ -219,6 +230,12 @@ void displayFlow()
     lpm = litersSinceDisplay * 60;
     M5.Lcd.printf("Flow: on %.1f lpm", lpm);  // if flow on, display lpm
   }
+}
+
+void displayFlow()
+{
+  displayFlowLine1();
+  displayFlowData();
 
   if (buttonB)
   {
@@ -234,7 +251,7 @@ void displayFlowLimit()
 {
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.println("ButtonB: set limit");
+  M5.Lcd.println("Button B: set limit");
   M5.Lcd.setCursor(0, 40, 4);
   int flowLimit_int = static_cast<int>(flowLimit);
   M5.Lcd.printf("%d", flowLimit_int);
@@ -269,7 +286,7 @@ void displayDateTime()
   switch (timeMode)
   {
     case 0:
-      M5.Lcd.println("ButtonB: set time\nor date");
+      M5.Lcd.println("Button B: set time\nor date");
       if (buttonB)
         timeMode++;
       break;
@@ -347,6 +364,23 @@ void displayDateTime()
   buttonB = false;
 }
 
+void displayValveOverride()
+{
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setCursor(0, 0, 1);
+  M5.Lcd.println(" Button B:\n Toggle valve state");
+
+  displayFlowData();
+
+  if (buttonB)
+  {
+    setShutoff(!shutoffValveState);
+    Serial.printf("Set shutoffValveState to %s\n", shutoffValveState?"false":"true");
+    buttonB = false;
+  }
+
+}
+
 void setShutoff(bool valveState)
 {
   shutoffValveState = valveState;     // reenable flow if it was disabled
@@ -407,15 +441,18 @@ void secondsUpdate()
       displayFlowLimit();
     else if (displayMode == 2)
       displayDateTime();
+    else if (displayMode == 3)
+      displayValveOverride();
+    else
+      displayMode = 0;  // should never get here
     
     // turn water off if limit exceeded
     if (litersSinceStart > flowLimit)
     {
-      shutoffValveState = true;
-      setShutoff(shutoffValveState);
+      setShutoff(true);
       if (!shutoffLogPrinted)
       {
-        Serial.println("Set shutoffValveState to true");
+        Serial.printf("Set shutoffValveState to %s\n", shutoffValveState?"false":"true");
         shutoffLogPrinted = true;
       }
     }
@@ -547,21 +584,15 @@ void loop() {
   {
     buttonA = false;
     if (displayMode == 0)
-    {
       displayMode = 1;
-    }
     else if (displayMode == 1)
-    {
       displayMode = 2;
-    }
     else if (displayMode == 2 && timeMode == 0)
-    {
-      displayMode = 0;
-    }
+      displayMode = 3;
     else if (displayMode == 2 && timeMode != 0)
-    {
       timeMode++;
-    }
+    else if (displayMode == 3)
+      displayMode = 0;
   }
 
   // process everything that should be done each second
