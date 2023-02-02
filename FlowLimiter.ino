@@ -243,15 +243,13 @@ void displayFlow()
     litersSinceStart = 0;
     lastReportedTotal = 0;
     setShutoff(false);  // re-enable flow
-    buttonB = false;
   }
 }
 
 void displayFlowLimit()
 {
-  M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.println("Button B: set limit");
+  M5.Lcd.println("Flow Limit\nButton B: change");
   M5.Lcd.setCursor(0, 40, 4);
   int flowLimit_int = static_cast<int>(flowLimit);
   M5.Lcd.printf("%d", flowLimit_int);
@@ -266,14 +264,13 @@ void displayFlowLimit()
     // write new flow-limit index to EEPROM
     EEPROM.write(FLOW_LIMIT_INDEX_ADDR, flowLimitTableIndex);
     EEPROM.commit();
-    buttonB = false;
   }
 }
 
 void displayDateTime()
 {
-  M5.Lcd.fillScreen(BLACK);
-
+  M5.Lcd.setCursor(0, 0, 1);
+  M5.Lcd.println("Date and Time");
   M5.Lcd.setCursor(0, 50, 1);
   M5.Lcd.printf("Date: %04d-%02d-%02d\n", RTC_DateStruct.Year,
   RTC_DateStruct.Month, RTC_DateStruct.Date);
@@ -282,11 +279,11 @@ void displayDateTime()
     RTC_TimeStruct.Minutes, RTC_TimeStruct.Seconds);
 
   // Display prompt for date/time field to set
-  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.setCursor(0, 100);
   switch (timeMode)
   {
     case 0:
-      M5.Lcd.println("Button B: set time\nor date");
+      M5.Lcd.println("Button B: Adjust\ntime/date");
       if (buttonB)
         timeMode++;
       break;
@@ -295,9 +292,9 @@ void displayDateTime()
       if (buttonB)
       {
         RTC_DateStruct.Year++;
-        if (RTC_DateStruct.Year > 2027)
+        if (RTC_DateStruct.Year > 2028)
         {
-          RTC_DateStruct.Year = 2022;
+          RTC_DateStruct.Year = 2023;
         }
         M5.Rtc.SetData(&RTC_DateStruct);
       }
@@ -361,14 +358,13 @@ void displayDateTime()
     default:
       resetDisplayMode();
   }
-  buttonB = false;
 }
 
 void displayValveOverride()
 {
-  M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.println(" Button B:\n Toggle valve state");
+  M5.Lcd.printf(" Valve State: %s\n", shutoffValveState?"closed":"open");
+  M5.Lcd.println(" Button B: Toggle");
 
   displayFlowData();
 
@@ -376,9 +372,19 @@ void displayValveOverride()
   {
     setShutoff(!shutoffValveState);
     Serial.printf("Set shutoffValveState to %s\n", shutoffValveState?"false":"true");
-    buttonB = false;
   }
+}
 
+void displaySimMode()
+{
+  M5.Lcd.setCursor(0, 0, 1);
+  M5.Lcd.printf("Flow simulation: %s\n Button B: toggle", simulateFlow?"on":"off");
+
+  if (buttonB)
+  {
+    simulateFlow = !simulateFlow;
+    EEPROM.write(SIM_FLOW_ADDR, (byte)simulateFlow);
+  }
 }
 
 void setShutoff(bool valveState)
@@ -432,7 +438,7 @@ void secondsUpdate()
     litersSinceStart = flowCount / pulsesPerLiter;  // assumes 1/60 lit = 6.6 pulses
     litersSinceStart_int = static_cast<int>(litersSinceStart);
 
-    // update the LCD display once/sec
+    // update the LCD display once/sec - blank it and hand off to display functions
     M5.Lcd.fillScreen(BLACK);
 
     if (displayMode == 0)
@@ -443,8 +449,12 @@ void secondsUpdate()
       displayDateTime();
     else if (displayMode == 3)
       displayValveOverride();
+    else if (displayMode == 4)
+      displaySimMode();
     else
       displayMode = 0;  // should never get here
+    // clear buttonB after display functions have used it
+    buttonB = false;
     
     // turn water off if limit exceeded
     if (litersSinceStart > flowLimit)
@@ -582,7 +592,6 @@ void loop() {
   // Big button cycles through display mode & time set fields
   if (buttonA)
   {
-    buttonA = false;
     if (displayMode == 0)
       displayMode = 1;
     else if (displayMode == 1)
@@ -592,7 +601,11 @@ void loop() {
     else if (displayMode == 2 && timeMode != 0)
       timeMode++;
     else if (displayMode == 3)
+      displayMode = 4;
+    else if (displayMode == 4)
       displayMode = 0;
+
+    buttonA = false;
   }
 
   // process everything that should be done each second
