@@ -64,8 +64,8 @@ bool buttonB = false;
 // water-subsystem variables
 const float pulsesPerLiter = 60 * 6.6;
 
-bool flowSensorOutput;
-bool lastFlowSensorOutput;
+uint8_t flowSensorOutput;  // current state of flow sensor output
+uint8_t lastFlowSensorOutput;
 int64_t flowCount = 0;  // how many total pulses have been seen
 int64_t lastDisplayflowCount = 0;
 float litersSinceStart = 0;  // how many liters since start of today
@@ -82,15 +82,19 @@ float reportRate = 0.0;
 float displayRate = 0.0;
 
 // Shutoff valve variables
-bool shutoffValveState = false;  // true = closed - flow shut off
+bool valveClosed = false;  // true = closed - flow shut off
 bool shutoffLogPrinted = false;
 
 // water-flow simulator variables
 const int flowOffDurationSec = 30;  // how long water should flow for
 const int flowOnDurationSec = 30;   // how long water should not flow for
-const int flowSensorHalfPeriod = 2525; // 2.525 msec for half a cycle at 30L/min
-bool simulateFlow;  // Initialized from EEPROM
-bool simFlowState = false;  // true: simulate flow
+const int flowSim30LpmHalfPeriod = 2382; // 2.832 msec for half a cycle at 30L/min
+const int flowSim600LphHalfPeriod = flowSim30LpmHalfPeriod * 3;  // adjust to 600 Lph
+const int flowSimMinHalfPeriod = flowSim600LphHalfPeriod * 100;  // always a little flow: 1%
+const float flowSimMinFreq = 1000000.0 / flowSimMinHalfPeriod;  // 1.40 Hz rate of sensor transitions is min flow for sim
+int flowSimHalfPeriod = flowSimMinHalfPeriod;  // set initial flow to min
+bool simulateFlow;  // Overall flow sim enable, initialized from EEPROM
+bool generateFlowPulses = false;  // true: generate flow pulses
 
 // Time-related variables
 int64_t secondsSinceStart = 0;
@@ -176,7 +180,7 @@ void publishMessage()
   doc["time"] = datetimeString;
   doc["cum"] = litersSinceStart_int;
   doc["rate"] = reportIncrement / rateDivisor;
-  doc["shutoff"] = shutoffValveState;
+  doc["shutoff"] = valveClosed;
   char jsonBuffer[512];
   serializeJson(doc, jsonBuffer); // print to client
 
@@ -218,7 +222,7 @@ void displayFlowData()
   M5.Lcd.setCursor(0, 40, 4);
   M5.Lcd.printf("% .0f", litersSinceStart);
   M5.Lcd.setCursor(0, 100, 2);
-  if (shutoffValveState)
+  if (valveClosed)
   {
     M5.Lcd.printf(" Flow: *INHIBITED*");
   }
@@ -271,24 +275,24 @@ void displayDateTime()
 {
   M5.Lcd.setCursor(0, 0, 1);
   M5.Lcd.println("Date and Time");
-  M5.Lcd.setCursor(0, 50, 1);
+  M5.Lcd.setCursor(0, 40, 1);
   M5.Lcd.printf("Date: %04d-%02d-%02d\n", RTC_DateStruct.Year,
   RTC_DateStruct.Month, RTC_DateStruct.Date);
-  M5.Lcd.setCursor(0, 70);
+  M5.Lcd.setCursor(0, 60);
   M5.Lcd.printf("Time: %02d:%02d:%02d\n", RTC_TimeStruct.Hours,
     RTC_TimeStruct.Minutes, RTC_TimeStruct.Seconds);
 
   // Display prompt for date/time field to set
-  M5.Lcd.setCursor(0, 100);
+  M5.Lcd.setCursor(0, 80);
   switch (timeMode)
   {
     case 0:
-      M5.Lcd.println("Button B: Adjust\ntime/date");
+      M5.Lcd.println("Button A: next\nButton B: Adjust\ntime/date");
       if (buttonB)
         timeMode++;
       break;
     case 1:
-      M5.Lcd.println("Button B: set year");
+      M5.Lcd.println("Button A: next\nButton B: set year");
       if (buttonB)
       {
         RTC_DateStruct.Year++;
@@ -300,7 +304,7 @@ void displayDateTime()
       }
       break;
     case 2:
-      M5.Lcd.println("Button B: set month");
+      M5.Lcd.println("Button A: next\nButton B: set month");
       if (buttonB)
       {
         RTC_DateStruct.Month++;
@@ -312,7 +316,7 @@ void displayDateTime()
       }
       break;
     case 3:
-      M5.Lcd.println("Button B: set day-of-month");
+      M5.Lcd.println("Button A: next\nButton B: set day-of-month");
       if (buttonB)
       {
         RTC_DateStruct.Date++;
@@ -324,7 +328,7 @@ void displayDateTime()
       }
       break;
     case 4:
-      M5.Lcd.println("Button B: set hour");
+      M5.Lcd.println("Button A: next\nButton B: set hour");
       if (buttonB)
       {
         RTC_TimeStruct.Hours++;
@@ -336,7 +340,7 @@ void displayDateTime()
       }
       break;
     case 5:
-      M5.Lcd.println("Button B: set minute");
+      M5.Lcd.println("Button A: next\nButton B: set minute");
       if (buttonB)
       {
         RTC_TimeStruct.Minutes++;
@@ -348,7 +352,7 @@ void displayDateTime()
       }
       break;
     case 6:
-      M5.Lcd.println("Button B: clear seconds");
+      M5.Lcd.println("Button A: next\nButton B: clear seconds");
       if (buttonB)
       {
         RTC_TimeStruct.Seconds = 0;
@@ -363,15 +367,15 @@ void displayDateTime()
 void displayValveOverride()
 {
   M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.printf(" Valve State: %s\n", shutoffValveState?"closed":"open");
+  M5.Lcd.printf(" Valve State: %s\n", valveClosed?"closed":"open");
   M5.Lcd.println(" Button B: Toggle");
 
   displayFlowData();
 
   if (buttonB)
   {
-    setShutoff(!shutoffValveState);
-    Serial.printf("Set shutoffValveState to %s\n", shutoffValveState?"false":"true");
+    setShutoff(!valveClosed);
+    Serial.printf("Set valveClosed to %s\n", valveClosed?"true":"false");
   }
 }
 
@@ -389,21 +393,19 @@ void displaySimMode()
 
 void setShutoff(bool valveState)
 {
-  shutoffValveState = valveState;     // reenable flow if it was disabled
-  digitalWrite(INHIBIT_PIN, shutoffValveState);    // set valve
-  if (!valveState)
+  if (valveState != valveClosed)
   {
-    shutoffLogPrinted = false;
+    shutoffLogPrinted = false; // print log on valve state changes
   }
+  valveClosed = valveState;     // reenable flow if it was disabled
+  digitalWrite(INHIBIT_PIN, valveClosed);    // set valve
 }
 
 void midnight()
 {
   Serial.println("Midnight");
-  flowCount = 0;  // reset liters in the day at midnight
-  litersSinceStart = 0;
-  lastReportedTotal = 0;
-  setShutoff(false);  // re-enable flow
+  delay(1000);
+  ESP.restart();  // reboot device to re-establish AWS comms if it had dropped
 }
 
 void hoursUpdate()
@@ -415,6 +417,21 @@ void hoursUpdate()
 
     if (0 == currentHour)
       midnight();
+    
+    if (currentHour > 7 && currentHour < 18)
+    {
+      // simulated water flow takes place between 8am & 6pm, random up to 10 lpm
+      int flowRandFactor = rand() % 100;  // randomize flow in the range 1/100 to 1 * base rate
+      float flowSimRandFreq = flowSimMinFreq + flowSimMinFreq * flowRandFactor;  // 1.40Hz - 140Hz
+      flowSimHalfPeriod = static_cast<int>(1000000.0 / flowSimRandFreq);
+      Serial.printf("flowRandFactor: %d flowSimMinFreq: %f flowSimRandFreq: %f flowSimHalfPeriod %d\n", 
+        flowRandFactor, flowSimMinFreq,  flowSimRandFreq, flowSimHalfPeriod);
+    }
+    else
+    {
+      // Outside flow hours, simulated water flow is 0.3 lpm
+      flowSimHalfPeriod = flowSimMinHalfPeriod;
+    }
 
     lastHour = currentHour;
   }
@@ -428,7 +445,7 @@ void secondsUpdate()
   {
     secondsSinceStart++;
     nextSecondTime += 1000000;
-    // Serial.printf("%lld toggleTime: %d state %d\n", secondsSinceStart, nextFlowToggleTime, simFlowState);
+    // Serial.printf("%lld toggleTime: %d state %d\n", secondsSinceStart, nextFlowToggleTime, generateFlowPulses);
 
     // Get the time-of-day from the real-time clock.
     M5.Rtc.GetTime(&RTC_TimeStruct);
@@ -462,7 +479,7 @@ void secondsUpdate()
       setShutoff(true);
       if (!shutoffLogPrinted)
       {
-        Serial.printf("Set shutoffValveState to %s\n", shutoffValveState?"false":"true");
+        Serial.printf("Set valveClosed to %s\n", valveClosed?"true":"false");
         shutoffLogPrinted = true;
       }
     }
@@ -491,28 +508,28 @@ void flowSim()
   // Check if it's time to toggle water flow state
   if (secondsSinceStart > nextFlowToggleTime)
   {
-    if (false == shutoffValveState && simFlowState == false)
+    if (false == valveClosed && generateFlowPulses == false)
     {
-      simFlowState = true;
-      nextFlowSensorTransition = now_us + flowSensorHalfPeriod;
+      generateFlowPulses = true;
+      nextFlowSensorTransition = now_us + flowSimHalfPeriod;
       nextFlowToggleTime = secondsSinceStart + flowOnDurationSec;
       // Serial.println("Sim flow started");
     }
     else
     {
-      simFlowState = false;
+      generateFlowPulses = false;
       nextFlowToggleTime = secondsSinceStart + flowOffDurationSec;
       // Serial.println("Sim flow stopped");
     }
   }
 
   // toggle the flow rate sensor output
-  if (false == shutoffValveState && true == simFlowState)
+  if (false == valveClosed && true == generateFlowPulses)
   {
     if (now_us > nextFlowSensorTransition)
     {
-      nextFlowSensorTransition = now_us + flowSensorHalfPeriod;
       simFlowSensorOutput = !simFlowSensorOutput;
+      nextFlowSensorTransition = now_us + flowSimHalfPeriod;
     }
   }
 }
@@ -530,6 +547,8 @@ void setup() {
   // for Flow Limiter, G36 is flow pulse input, G26 is valve output
   pinMode(FLOW_PULSE_PIN, INPUT_PULLUP);
   pinMode(INHIBIT_PIN, OUTPUT);
+  gpio_pulldown_dis(GPIO_NUM_25);
+  gpio_pullup_dis(GPIO_NUM_25);
   digitalWrite(INHIBIT_PIN, false);
 
   // Initialize EEPROM
@@ -563,14 +582,20 @@ void setup() {
 
   if (simulateFlow)
   {
-    flowSensorOutput = simFlowSensorOutput;
+    if (simFlowSensorOutput)
+      flowSensorOutput = HIGH;
+    else
+      flowSensorOutput = LOW;
     nextFlowToggleTime = secondsSinceStart + flowOffDurationSec; // start with water off
+    srand(100);
   }
   else
   {
     flowSensorOutput = digitalRead(FLOW_PULSE_PIN);
   }
   lastFlowSensorOutput = flowSensorOutput;
+
+  setShutoff(false);  // re-enable flow if it was inhibited
 
   delay(2000);  // pause to allow reading startup msgs
   M5.Lcd.fillScreen(BLACK);
@@ -616,7 +641,10 @@ void loop() {
   {
     // call the flow simulator
     flowSim();
-    flowSensorOutput = simFlowSensorOutput;
+    if (simFlowSensorOutput)
+      flowSensorOutput = HIGH;
+    else
+      flowSensorOutput = LOW;
   }
   else
   {
@@ -624,7 +652,7 @@ void loop() {
   }
 
   // Count rising edges from flow sensor
-  if (flowSensorOutput && !lastFlowSensorOutput)
+  if (HIGH == flowSensorOutput && LOW == lastFlowSensorOutput)
   {
     flowCount++;
     // Serial.print("+");
