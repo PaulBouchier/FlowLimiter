@@ -72,7 +72,7 @@ float litersSinceStart = 0;  // how many liters since start of today
 int litersSinceStart_int;
 float lpm = 0;  // liters/minute for display
 float flowLimit;
-float flowLimitTable[] = {2000.0, 1000.0, 500.0, 200.0, 100.0, 50.0};
+float flowLimitTable[] = {2000.0, 1000.0, 500.0, 200.0, 100.0, 20.0};
 int flowLimitTableSize = sizeof(flowLimitTable) / sizeof(float);
 unsigned char flowLimitTableIndex;
 
@@ -388,6 +388,7 @@ void displaySimMode()
   {
     simulateFlow = !simulateFlow;
     EEPROM.write(SIM_FLOW_ADDR, (byte)simulateFlow);
+    EEPROM.commit();
   }
 }
 
