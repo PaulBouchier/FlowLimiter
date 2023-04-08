@@ -44,7 +44,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 // The MQTT topics that this device should publish/subscribe
 #define AWS_IOT_PUBLISH_TOPIC   "flow-limiter/flow"
-#define AWS_IOT_LOGS_TOPIC   "flow-limiter/logs"
 #define AWS_IOT_SUBSCRIBE_TOPIC "esp32/sub"
 
 // RTC time variables
@@ -73,15 +72,10 @@ float litersSinceStart = 0;  // how many liters since start of today
 int litersSinceStart_int;
 float lpm = 0;  // liters/minute for display
 float flowLimit;
-float flowLimitTable[] = {2000.0, 1500.0, 1000.0, 500.0, 200.0, 100.0, 20.0};
+float flowLimitTable[] = {2000.0, 1000.0, 500.0, 200.0, 100.0, 20.0};
 int flowLimitTableSize = sizeof(flowLimitTable) / sizeof(float);
 unsigned char flowLimitTableIndex;
 
-// AWS variables
-bool wifiConnecting = false;
-bool wifiConnected = false;
-bool awsConnecting = false;
-bool awsConnected = false;
 float lastReportedTotal = 0;
 float reportIncrement = 0;
 float reportRate = 0.0;
@@ -117,80 +111,63 @@ int deviceId;
 WiFiClientSecure net = WiFiClientSecure();
 MQTTClient client = MQTTClient(256);
 
-/*
-  @brief Poll connectAWS() with a delay to get AWS connected, returns connected status
-*/
-bool connectAWS()
+void connectAWS()
 {
-  if (!wifiConnecting)
-  {
-    // runs once
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    wifiConnecting = true;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.print("Wi-Fi:");
+  M5.Lcd.print("Wi-Fi:");
+
+  while (WiFi.status() != WL_CONNECTED){
+    delay(500);
+    Serial.print(".");
+    M5.Lcd.print(".");
+  }
+  Serial.println("OK");
+  M5.Lcd.println("OK");
+  lineCnt++;
+
+  // Configure WiFiClientSecure to use the AWS IoT device credentials
+  net.setCACert(AWS_CERT_CA);
+  net.setCertificate(AWS_CERT_CRT);
+  net.setPrivateKey(AWS_CERT_PRIVATE);
+
+  // set keepalive to 180 sec, timeout to 1000 sec
+  client.setOptions(180, true, 1000);
+  // Connect to the MQTT broker on the AWS endpoint we defined earlier
+  client.begin(AWS_IOT_ENDPOINT, 8883, net);
+
+  // Create a message handler
+  client.onMessage(messageHandler);
+
+  Serial.print("AWS IoT: ");
+  M5.Lcd.print("AWS IoT: ");
+
+  while (!client.connect(THINGNAME)) {
+    Serial.print(".");
+    M5.Lcd.print(".");
+    delay(100);
   }
 
-  if (!wifiConnected)
-  {
-    // polled until wifi connects
-    if (WiFi.status() != WL_CONNECTED){
-      return false;
-    }
-    wifiConnected = true;
-    M5.Lcd.setTextColor(TFT_ORANGE,TFT_BLACK);
-    Serial.println("Wifi connected");
+  if(!client.connected()){
+    Serial.println("Fail: AWS IoT Timeout!");
+    return;
+  }
+  else{
+    Serial.println("OK");
+    M5.Lcd.println("OK");
+    lineCnt++;
   }
 
-  if (!awsConnecting)
-  {
-    // runs once
-    // Configure WiFiClientSecure to use the AWS IoT device credentials
-    net.setCACert(AWS_CERT_CA);
-    net.setCertificate(AWS_CERT_CRT);
-    net.setPrivateKey(AWS_CERT_PRIVATE);
+  // Subscribe to a topic
+  client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
 
-    // set keepalive to 180 sec, timeout to 1000 sec
-    client.setOptions(180, true, 1000);
-    // Connect to the MQTT broker on the AWS endpoint we defined earlier
-    client.begin(AWS_IOT_ENDPOINT, 8883, net);
-    delay(1000);
-
-    client.connect(THINGNAME);
-
-    // Create a message handler
-    client.onMessage(messageHandler);
-
-    awsConnecting = true;
-    return false;
-  }
-
-  if (!awsConnected)
-  {
-    if(!client.connected()){  // polled until success
-      Serial.println("AWS NOT yet connected");
-      return false;
-    }
-    M5.Lcd.setTextColor(TFT_YELLOW,TFT_BLACK);
-    Serial.println("AWS connected");
-
-    // Subscribe to a topic
-    client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
-    awsConnected = true;
-  }
-  return awsConnected;
-}
-
-bool reconnectAWS()
-{
-  client.disconnect();
-  delay(1000);
-  client.connect(THINGNAME);
+  delay(2000);
 }
 
 void publishMessage()
 {
-  if (!awsConnected)
-    return;
   // generate timestamp
   char datetime[30];
   sprintf(datetime, "%04d-%02d-%02d %02d:%02d:%02d",
@@ -298,6 +275,12 @@ void displayDateTime()
 {
   M5.Lcd.setCursor(0, 0, 1);
   M5.Lcd.println("Date and Time");
+  M5.Lcd.setCursor(0, 40, 1);
+  M5.Lcd.printf("Date: %04d-%02d-%02d\n", RTC_DateStruct.Year,
+  RTC_DateStruct.Month, RTC_DateStruct.Date);
+  M5.Lcd.setCursor(0, 60);
+  M5.Lcd.printf("Time: %02d:%02d:%02d\n", RTC_TimeStruct.Hours,
+    RTC_TimeStruct.Minutes, RTC_TimeStruct.Seconds);
 
   // Display prompt for date/time field to set
   M5.Lcd.setCursor(0, 80);
@@ -379,16 +362,14 @@ void displayDateTime()
     default:
       resetDisplayMode();
   }
-  M5.Lcd.setCursor(0, 40, 1);
-  M5.Lcd.printf("Date: %04d-%02d-%02d\n", RTC_DateStruct.Year,
-  RTC_DateStruct.Month, RTC_DateStruct.Date);
-  M5.Lcd.setCursor(0, 60);
-  M5.Lcd.printf("Time: %02d:%02d:%02d\n", RTC_TimeStruct.Hours,
-    RTC_TimeStruct.Minutes, RTC_TimeStruct.Seconds);
 }
 
 void displayValveOverride()
 {
+  M5.Lcd.setCursor(0, 0, 1);
+  M5.Lcd.printf(" Valve State: %s\n", valveClosed?"closed":"open");
+  M5.Lcd.println(" Button B: Toggle");
+
   displayFlowData();
 
   if (buttonB)
@@ -396,43 +377,19 @@ void displayValveOverride()
     setShutoff(!valveClosed);
     Serial.printf("Set valveClosed to %s\n", valveClosed?"true":"false");
   }
-
-  M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.printf(" Valve State: %s\n", valveClosed?"closed":"open");
-  M5.Lcd.println(" Button B: Toggle");
 }
 
 void displaySimMode()
 {
+  M5.Lcd.setCursor(0, 0, 1);
+  M5.Lcd.printf("Flow simulation: %s\n Button B: toggle", simulateFlow?"on":"off");
+
   if (buttonB)
   {
     simulateFlow = !simulateFlow;
     EEPROM.write(SIM_FLOW_ADDR, (byte)simulateFlow);
     EEPROM.commit();
   }
-  M5.Lcd.setCursor(0, 0, 1);
-  M5.Lcd.printf("Flow simulation: %s\n Button B: toggle", simulateFlow?"on":"off");
-
-}
-
-void updateDisplay()
-{
-  M5.Lcd.fillScreen(BLACK);
-
-  if (displayMode == 0)
-    displayFlow();
-  else if (displayMode == 1)
-    displayFlowLimit();
-  else if (displayMode == 2)
-    displayDateTime();
-  else if (displayMode == 3)
-    displayValveOverride();
-  else if (displayMode == 4)
-    displaySimMode();
-  else
-    displayMode = 0;  // should never get here
-  // clear buttonB after display functions have used it
-  buttonB = false;
 }
 
 void setShutoff(bool valveState)
@@ -477,55 +434,72 @@ void hoursUpdate()
       flowSimHalfPeriod = flowSimMinHalfPeriod;
     }
 
-    if (currentHour == 7)
-      reconnectAWS();
-
     lastHour = currentHour;
   }
 }
 
 void secondsUpdate()
 {
-  // Check if we've connected to AWS yet
-  if (!awsConnected)
-    connectAWS();
-
-  // Get the time-of-day from the real-time clock for use by various called functions.
-  M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
-
-  // update measured flow and rate each second
-  litersSinceStart = flowCount / pulsesPerLiter;  // assumes 1/60 lit = 6.6 pulses
-  litersSinceStart_int = static_cast<int>(litersSinceStart);
-
-  // update the LCD display once/sec - blank it and hand off to display functions
-  updateDisplay();
-  
-  // turn water off if limit exceeded
-  if (litersSinceStart > flowLimit)
+  // Check if it's time to increment the seconds-counter
+  int64_t now_us = esp_timer_get_time();
+  if (now_us > nextSecondTime)
   {
-    setShutoff(true);
-    if (!shutoffLogPrinted)
+    secondsSinceStart++;
+    nextSecondTime += 1000000;
+    // Serial.printf("%lld toggleTime: %d state %d\n", secondsSinceStart, nextFlowToggleTime, generateFlowPulses);
+
+    // Get the time-of-day from the real-time clock.
+    M5.Rtc.GetTime(&RTC_TimeStruct);
+    M5.Rtc.GetData(&RTC_DateStruct);
+
+    // update measured flow and rate each second
+    litersSinceStart = flowCount / pulsesPerLiter;  // assumes 1/60 lit = 6.6 pulses
+    litersSinceStart_int = static_cast<int>(litersSinceStart);
+
+    // update the LCD display once/sec - blank it and hand off to display functions
+    M5.Lcd.fillScreen(BLACK);
+
+    if (displayMode == 0)
+      displayFlow();
+    else if (displayMode == 1)
+      displayFlowLimit();
+    else if (displayMode == 2)
+      displayDateTime();
+    else if (displayMode == 3)
+      displayValveOverride();
+    else if (displayMode == 4)
+      displaySimMode();
+    else
+      displayMode = 0;  // should never get here
+    // clear buttonB after display functions have used it
+    buttonB = false;
+    
+    // turn water off if limit exceeded
+    if (litersSinceStart > flowLimit)
     {
-      Serial.printf("Set valveClosed to %s\n", valveClosed?"true":"false");
-      shutoffLogPrinted = true;
+      setShutoff(true);
+      if (!shutoffLogPrinted)
+      {
+        Serial.printf("Set valveClosed to %s\n", valveClosed?"true":"false");
+        shutoffLogPrinted = true;
+      }
     }
-  }
 
-  // Check if we need to send a report to the cloud
-  if (secondsSinceStart > nextPeriodTime)
-  {
-    nextPeriodTime = secondsSinceStart + reportingPeriodSec;
-    reportIncrement = litersSinceStart - lastReportedTotal;
-    if (reportIncrement < 0)
-      reportIncrement = 0;
-    lastReportedTotal = litersSinceStart;
-    publishMessage();
-    Serial.printf("liters since start: %f Increment: %f\n", litersSinceStart, reportIncrement);
-  }
+    // Check if we need to send a report to the cloud
+    if (secondsSinceStart > nextPeriodTime)
+    {
+      nextPeriodTime = secondsSinceStart + reportingPeriodSec;
+      reportIncrement = litersSinceStart - lastReportedTotal;
+      if (reportIncrement < 0)
+        reportIncrement = 0;
+      lastReportedTotal = litersSinceStart;
+      publishMessage();
+      Serial.printf("liters since start: %f Increment: %f\n", litersSinceStart, reportIncrement);
+    }
 
-  // check if we are in a new hour and do hour-aligned work
+    // check if we are in a new hour and do hour-aligned work
     hoursUpdate();
+  }
 }
 
 void flowSim()
@@ -566,7 +540,7 @@ void setup() {
   M5.Lcd.setRotation(1);
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 0, 2);
-  M5.Lcd.setTextColor(TFT_RED,TFT_BLACK);
+  M5.Lcd.setTextColor(TFT_WHITE,TFT_BLACK);
   M5.Lcd.setTextSize(2);
 
   Serial.begin(115200);
@@ -596,6 +570,8 @@ void setup() {
   if (flowLimitTableIndex < flowLimitTableSize)
     flowLimit = flowLimitTable[flowLimitTableIndex];
   Serial.printf("flow limit: %f from index %d\n", flowLimit, flowLimitTableIndex);
+
+  connectAWS();
 
   int64_t now = esp_timer_get_time();
   nextSecondTime = now + 1000000;  // time to increment the seconds counter
@@ -658,20 +634,8 @@ void loop() {
     buttonA = false;
   }
 
-  // Process button B immediately
-  if (buttonB)
-    updateDisplay();
-
-  // Check if it's time to increment the seconds-counter
-  // and process everything that should be done each second
-  int64_t now_us = esp_timer_get_time();
-  if (now_us > nextSecondTime)
-  {
-    secondsSinceStart++;
-    nextSecondTime += 1000000;
-    // Serial.printf("%lld toggleTime: %d state %d\n", secondsSinceStart, nextFlowToggleTime, generateFlowPulses);
-    secondsUpdate();
-  }
+  // process everything that should be done each second
+  secondsUpdate();
 
   // get flow sensor output
   if (simulateFlow)
