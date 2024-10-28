@@ -72,7 +72,7 @@ float litersSinceStart = 0;  // how many liters since start of today
 int litersSinceStart_int;
 float lpm = 0;  // liters/minute for display
 float flowLimit;
-float flowLimitTable[] = {2000.0, 1500.0, 1000.0, 500.0, 200.0, 100.0, 20.0};
+float flowLimitTable[] = {2000.0, 1500.0, 1000.0, 750.0, 500.0, 200.0, 100.0, 20.0};
 int flowLimitTableSize = sizeof(flowLimitTable) / sizeof(float);
 unsigned char flowLimitTableIndex;
 
@@ -85,6 +85,7 @@ float lastReportedTotal = 0;
 float reportIncrement = 0;
 float reportRate = 0.0;
 float displayRate = 0.0;
+char thingName[30];
 
 // Shutoff valve variables
 bool valveClosed = false;  // true = closed - flow shut off
@@ -108,7 +109,7 @@ int64_t nextFlowSensorTransition;
 bool simFlowSensorOutput = false;
 int nextFlowToggleTime;
 int lastHour = 0;
-const int reportingPeriodSec = 300;  // report each 5 minutes
+const int reportingPeriodSec = 900;  // report each 15 minutes
 int nextPeriodTime = reportingPeriodSec;
 float rateDivisor = reportingPeriodSec / 60;  // convert flow increment to lpm
 
@@ -154,7 +155,7 @@ bool connectAWS()
     client.begin(AWS_IOT_ENDPOINT, 8883, net);
     delay(1000);
 
-    client.connect(THINGNAME);
+    client.connect(thingName);
 
     // Create a message handler
     client.onMessage(messageHandler);
@@ -179,6 +180,33 @@ bool connectAWS()
   return awsConnected;
 }
 
+bool reconnectAWS()
+{
+  client.disconnect();
+  Serial.println("disconnected from AWS");
+  delay(1000);
+
+  // set keepalive to 180 sec, timeout to 1000 sec
+  client.setOptions(180, true, 1000);
+  // Connect to the MQTT broker on the AWS endpoint we defined earlier
+  client.begin(AWS_IOT_ENDPOINT, 8883, net);
+  delay(1000);
+
+  client.connect(thingName);
+  Serial.println("reconnected to AWS");
+
+  delay(1000);
+
+  // Create a message handler
+  client.onMessage(messageHandler);
+  Serial.println("registered messageHandler");
+
+  // Subscribe to a topic
+  client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
+  Serial.println("subscribed to topic");
+
+}
+
 void publishMessage()
 {
   if (!awsConnected)
@@ -199,6 +227,7 @@ void publishMessage()
   char jsonBuffer[512];
   serializeJson(doc, jsonBuffer); // print to client
 
+  Serial.println("about to publish to AWS");
   client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
   Serial.print("published to AWS at ");
   Serial.println(datetimeString);
@@ -468,6 +497,13 @@ void hoursUpdate()
       // Outside flow hours, simulated water flow is 0.3 lpm
       flowSimHalfPeriod = flowSimMinHalfPeriod;
     }
+/*
+    if (currentHour == 7)
+    {
+      Serial.println("reconnecting AWS at 7am");
+      reconnectAWS();
+    }
+*/
 
     lastHour = currentHour;
   }
@@ -509,6 +545,7 @@ void secondsUpdate()
     if (reportIncrement < 0)
       reportIncrement = 0;
     lastReportedTotal = litersSinceStart;
+    Serial.println("calling publishMessage()");
     publishMessage();
     Serial.printf("liters since start: %f Increment: %f\n", litersSinceStart, reportIncrement);
   }
@@ -577,6 +614,8 @@ void setup() {
   // Initialize variables from EEPROM
   deviceId = EEPROM.read(DEV_NUM_ADDR);
   Serial.printf("Device ID: %d\n", deviceId);
+  sprintf(thingName, "FlowLimiter%d", deviceId);
+  Serial.printf("thingName: %s", thingName);
 
   simulateFlow = EEPROM.read(SIM_FLOW_ADDR);
   Serial.printf("Simulate Flow: %s\n", simulateFlow?"true":"false");
@@ -614,6 +653,14 @@ void setup() {
   delay(2000);  // pause to allow reading startup msgs
   M5.Lcd.fillScreen(BLACK);
   resetDisplayMode();
+
+  char datetime[30];
+  sprintf(datetime, "%04d-%02d-%02d %02d:%02d:%02d",
+  RTC_DateStruct.Year, RTC_DateStruct.Month, RTC_DateStruct.Date,
+  RTC_TimeStruct.Hours, RTC_TimeStruct.Minutes, RTC_TimeStruct.Seconds);
+  String datetimeString = String(datetime);
+  Serial.print("Finished setup() at ");
+  Serial.println(datetimeString);
 }
 
 void loop() {
