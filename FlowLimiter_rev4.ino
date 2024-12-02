@@ -24,6 +24,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 #include "secrets.h"
 #include <WiFiClientSecure.h>
+
 #include <MQTTClient.h>
 #include <ArduinoJson.h>
 #include "WiFi.h"
@@ -338,7 +339,7 @@ void displayDateTime()
         {
           RTC_DateStruct.Year = 2023;
         }
-        M5.Rtc.SetData(&RTC_DateStruct);
+        M5.Rtc.SetDate(&RTC_DateStruct);
       }
       break;
     case 2:
@@ -350,7 +351,7 @@ void displayDateTime()
         {
           RTC_DateStruct.Month = 1;
         }
-        M5.Rtc.SetData(&RTC_DateStruct);
+        M5.Rtc.SetDate(&RTC_DateStruct);
       }
       break;
     case 3:
@@ -362,7 +363,7 @@ void displayDateTime()
         {
           RTC_DateStruct.Date = 1;
         }
-        M5.Rtc.SetData(&RTC_DateStruct);
+        M5.Rtc.SetDate(&RTC_DateStruct);
       }
       break;
     case 4:
@@ -517,7 +518,7 @@ void secondsUpdate()
 
   // Get the time-of-day from the real-time clock for use by various called functions.
   M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
+  M5.Rtc.GetDate(&RTC_DateStruct);
 
   // update measured flow and rate each second
   litersSinceStart = flowCount / pulsesPerLiter;  // assumes 1/60 lit = 6.6 pulses
@@ -630,7 +631,7 @@ void setup() {
 
   // Get the time-of-day from the real-time clock.
   M5.Rtc.GetTime(&RTC_TimeStruct);
-  M5.Rtc.GetData(&RTC_DateStruct);
+  M5.Rtc.GetDate(&RTC_DateStruct);
   lastHour = RTC_TimeStruct.Hours;
 
   if (simulateFlow)
